@@ -12,6 +12,3 @@ wheels/
 # Other
 .DS_Store
 .coverage
-
-# Output
-djangocon-2025.ics
