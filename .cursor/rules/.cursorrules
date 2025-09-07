@@ -1,0 +1,16 @@
+For tests
+- use Arrange, Act, Assert structure
+- simplify assertions to `assert result == expected` where possible to reduce assertions needed
+- do not do real integration tests with a remote URL
+- use parameterization (pytest.mark.parametrize) to reduce multiple similar assertions
+
+For comments, focus on "why" comments rather than "what"/"how" comments. Be concise.
+
+For code organization
+- keep main() at top of module and utility methods lower in file
+- prefer type hints for function parameters and return values
+- use modern Python syntax (list over List, |None over Optional)
+
+For error handling
+- let exceptions bubble up unless you can meaningfully handle them
+- use specific exception types, avoid bare except clauses
