@@ -7,6 +7,7 @@ from datetime import date, datetime
 from unittest.mock import patch
 
 import pytest
+import requests
 from bs4 import BeautifulSoup
 from dateutil import tz
 
@@ -23,6 +24,7 @@ from main import (
     parse_day_events,
     parse_time_block_events,
     parse_section_event,
+    fetch_talk_description,
 )
 
 
@@ -559,15 +561,18 @@ class TestIntegration:
         # Act
         with patch('requests.get') as mock_get:
             mock_get.return_value.text = mock_html
-            with patch('sys.argv', ['main.py', '--url', 'https://custom.example.com/schedule/', '--out', str(ics_file)]):
-                result = main()
+            with patch('main.fetch_talk_description') as mock_fetch:
+                mock_fetch.return_value = ""
+                with patch('sys.argv', ['main.py', '--url', 'https://custom.example.com/schedule/', '--out', str(ics_file)]):
+                    result = main()
         
         # Assert
         assert result == 0, "CLI should return success code"
         assert ics_file.exists(), "Output file should be created"
         
-        # Verify the custom URL was called
-        mock_get.assert_called_once_with("https://custom.example.com/schedule/", timeout=30)
+        # Verify the custom URL was called (and the talk description fetch)
+        assert mock_get.call_count >= 1, "Should have called requests.get at least once"
+        assert mock_get.call_args_list[0] == (('https://custom.example.com/schedule/',), {'timeout': 30})
         
         content = ics_file.read_text(encoding='utf-8')
         
@@ -652,14 +657,18 @@ class TestParseDayEvents:
             {
                 "title": "Opening Keynote",
                 "room": "Main Ballroom",
-                "description": "Presented by: John Doe\nLocation: Main Ballroom",
+                "description": "Presented by: John Doe\nLocation: Main Ballroom\n\nMore info: https://2025.djangocon.us/talks/opening-keynote/",
                 "start": datetime(2025, 9, 8, 9, 0, tzinfo=tz.tzoffset(None, -5*3600)),  # 9:00 AM CDT
                 "end": datetime(2025, 9, 8, 10, 0, tzinfo=tz.tzoffset(None, -5*3600)),    # 10:00 AM CDT
+                "url": "https://2025.djangocon.us/talks/opening-keynote/",
+                "talk_description": "",
             }
         ]
         
         # Act
-        result = parse_day_events(valid_h2_with_events)
+        with patch('main.fetch_talk_description') as mock_fetch:
+            mock_fetch.return_value = ""
+            result = parse_day_events(valid_h2_with_events)
         
         # Assert
         assert result == expected
@@ -823,14 +832,18 @@ class TestParseTimeBlockEvents:
             {
                 "title": "Opening Keynote",
                 "room": "Main Ballroom",
-                "description": "Presented by: John Doe\nLocation: Main Ballroom",
+                "description": "Presented by: John Doe\nLocation: Main Ballroom\n\nMore info: https://2025.djangocon.us/talks/opening-keynote/",
                 "start": datetime(2025, 9, 8, 9, 0, tzinfo=tz.tzoffset(None, -5*3600)),  # 9:00 AM CDT
                 "end": datetime(2025, 9, 8, 10, 0, tzinfo=tz.tzoffset(None, -5*3600)),    # 10:00 AM CDT
+                "url": "https://2025.djangocon.us/talks/opening-keynote/",
+                "talk_description": "",
             }
         ]
         
         # Act
-        result = parse_time_block_events(valid_time_block)
+        with patch('main.fetch_talk_description') as mock_fetch:
+            mock_fetch.return_value = ""
+            result = parse_time_block_events(valid_time_block)
         
         # Assert
         assert result == expected
@@ -890,6 +903,69 @@ class TestParseTimeBlockEvents:
         
         # Assert
         assert result == expected
+
+
+class TestFetchTalkDescription:
+    """Test the fetch_talk_description function."""
+    
+    def test_fetch_talk_description_with_mock_response(self):
+        """Test fetching talk description with mocked response."""
+        # Arrange
+        mock_html = """
+        <html>
+        <body>
+            <h2>About this session</h2>
+            <div class="prose">
+                <p>This is a test talk description.</p>
+                <p>It has multiple paragraphs.</p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Act
+        with patch('requests.get') as mock_get:
+            mock_response = mock_get.return_value
+            mock_response.text = mock_html
+            mock_response.raise_for_status.return_value = None
+            result = fetch_talk_description("https://example.com/talk")
+        
+        # Assert
+        assert result == "This is a test talk description.\n\nIt has multiple paragraphs."
+        mock_get.assert_called_once_with("https://example.com/talk", timeout=10)
+    
+    def test_fetch_talk_description_empty_url(self):
+        """Test fetching talk description with empty URL."""
+        # Act
+        result = fetch_talk_description("")
+        
+        # Assert
+        assert result == ""
+    
+    def test_fetch_talk_description_no_about_section(self):
+        """Test fetching talk description when no about section exists."""
+        # Arrange
+        mock_html = "<html><body><h2>Other section</h2></body></html>"
+        
+        # Act
+        with patch('requests.get') as mock_get:
+            mock_response = mock_get.return_value
+            mock_response.text = mock_html
+            mock_response.raise_for_status.return_value = None
+            result = fetch_talk_description("https://example.com/talk")
+        
+        # Assert
+        assert result == ""
+    
+    def test_fetch_talk_description_request_error(self):
+        """Test fetching talk description when request fails."""
+        # Act
+        with patch('requests.get') as mock_get:
+            mock_get.side_effect = requests.RequestException("Network error")
+            result = fetch_talk_description("https://example.com/talk")
+        
+        # Assert
+        assert result == ""
 
 
 class TestParseSectionEvent:
@@ -988,11 +1064,15 @@ class TestParseSectionEvent:
             "room": "Main Ballroom",
             "start": start_dt,
             "end": end_dt,
-            "description": "Presented by: John Doe, Jane Smith\nAudience level: Intermediate\nLocation: Main Ballroom",
+            "description": "Presented by: John Doe, Jane Smith\nAudience level: Intermediate\nLocation: Main Ballroom\n\nMore info: https://2025.djangocon.us/talks/opening-keynote/",
+            "url": "https://2025.djangocon.us/talks/opening-keynote/",
+            "talk_description": "",
         }
         
         # Act
-        result = parse_section_event(valid_section_with_all_fields, start_dt, end_dt)
+        with patch('main.fetch_talk_description') as mock_fetch:
+            mock_fetch.return_value = ""
+            result = parse_section_event(valid_section_with_all_fields, start_dt, end_dt)
         
         # Assert
         assert result == expected
@@ -1021,6 +1101,8 @@ class TestParseSectionEvent:
             "start": start_dt,
             "end": end_dt,
             "description": "",
+            "url": "",
+            "talk_description": "",
         }
         
         # Act
@@ -1040,6 +1122,8 @@ class TestParseSectionEvent:
             "start": start_dt,
             "end": end_dt,
             "description": "",
+            "url": "",
+            "talk_description": "",
         }
         
         # Act
@@ -1059,6 +1143,8 @@ class TestParseSectionEvent:
             "start": start_dt,
             "end": end_dt,
             "description": "",
+            "url": "",
+            "talk_description": "",
         }
         
         # Act
@@ -1106,6 +1192,8 @@ class TestParseSectionEvent:
             "start": start_dt,
             "end": end_dt,
             "description": "Location: Room 101",
+            "url": "",
+            "talk_description": "",
         }
         
         # Act

@@ -132,6 +132,33 @@ def parse_time_block_events(time_block: Tag) -> list[dict[str, Any]]:
     return events
 
 
+def fetch_talk_description(talk_url: str) -> str:
+    """Fetch talk description from individual talk page."""
+    if not talk_url:
+        return ""
+    
+    try:
+        response = requests.get(talk_url, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Look for the "About this session" section
+        about_section = soup.find("h2", string="About this session")
+        if about_section:
+            # Find the next div with prose class that contains the description
+            prose_div = about_section.find_next("div", class_="prose")
+            if prose_div:
+                # Extract text from paragraphs, preserving line breaks
+                paragraphs = prose_div.find_all("p")
+                if paragraphs:
+                    return "\n\n".join(clean_text(p.get_text(" ")) for p in paragraphs)
+        
+        return ""
+    except (requests.RequestException, Exception) as e:
+        print(f"Warning: Failed to fetch description from {talk_url}: {e}")
+        return ""
+
+
 def parse_section_event(section: Tag, start_dt: datetime, end_dt: datetime) -> dict[str, Any] | None:
     """Extract event details from a schedule section."""
     # Get room information
@@ -146,8 +173,13 @@ def parse_section_event(section: Tag, start_dt: datetime, end_dt: datetime) -> d
     title_link = h4.find("a")
     if title_link:
         title = clean_text(title_link.get_text(" "))
+        talk_url = title_link.get("href", "")
+        # Convert relative URL to absolute URL
+        if talk_url and not talk_url.startswith("http"):
+            talk_url = f"https://2025.djangocon.us{talk_url}"
     else:
         title = clean_text(h4.get_text(" "))
+        talk_url = ""
 
     if not title:
         return None
@@ -172,6 +204,11 @@ def parse_section_event(section: Tag, start_dt: datetime, end_dt: datetime) -> d
         if audience_text and audience_text != "All":
             audience_level = f"Audience level: {audience_text}"
 
+    # Fetch talk description if URL is available
+    talk_description = ""
+    if talk_url:
+        talk_description = fetch_talk_description(talk_url)
+
     # Combine metadata into description
     desc_parts = []
     if presenters:
@@ -180,6 +217,10 @@ def parse_section_event(section: Tag, start_dt: datetime, end_dt: datetime) -> d
         desc_parts.append(audience_level)
     if room:
         desc_parts.append(f"Location: {room}")
+    if talk_description:
+        desc_parts.append(f"\nDescription:\n{talk_description}")
+    if talk_url:
+        desc_parts.append(f"\nMore info: {talk_url}")
 
     description = "\n".join(desc_parts) if desc_parts else ""
 
@@ -189,6 +230,8 @@ def parse_section_event(section: Tag, start_dt: datetime, end_dt: datetime) -> d
         "end": end_dt,
         "room": room,
         "description": description,
+        "url": talk_url,
+        "talk_description": talk_description,
     }
 
 
@@ -213,6 +256,7 @@ def generate_ics(events: list[dict[str, Any]], output_file: str) -> None:
             ics_escape(ev.get("description", "")) if ev.get("description") else ""
         )
         location = ics_escape(ev["room"]) if ev.get("room") else ""
+        url = ev.get("url", "")
         lines.extend(
             [
                 "BEGIN:VEVENT",
@@ -227,6 +271,8 @@ def generate_ics(events: list[dict[str, Any]], output_file: str) -> None:
             lines.append(fold_line(f"LOCATION:{location}"))
         if description:
             lines.append(fold_line(f"DESCRIPTION:{description}"))
+        if url:
+            lines.append(fold_line(f"URL:{url}"))
         lines.append("END:VEVENT")
 
     lines.append("END:VCALENDAR")
