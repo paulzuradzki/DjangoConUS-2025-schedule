@@ -29,6 +29,10 @@ Generates an ICS file with all conference events:
 - Talks, keynotes, breaks, meals, special events, sprints
 - Times converted to UTC, includes locations and presenters
 
+## Importing to Your Calendar
+
+See [docs/importing-to-calendar.md](docs/importing-to-calendar.md) for instructions on importing the schedule to your calendar.
+
 ## Dependencies
 
 To add dependencies:
